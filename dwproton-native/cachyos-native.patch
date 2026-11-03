@@ -1,0 +1,331 @@
+CachyOS native-build changes for dwproton
+
+dwproton-11.0-16 is based on CachyOS's cachyos-11.0-20261015-slr tag (the
+"upstream" branch of https://dawn.wine/dawn-winery/dwproton). This patch adds
+the commits that turn that tag into cachyos-11.0-20261015-native. It was made
+in https://github.com/CachyOS/proton-cachyos with:
+
+  git diff cachyos-11.0-20261015-slr cachyos-11.0-20261015-native
+
+It holds these CachyOS commits:
+  86f98f60 Partially revert "Makefile.in: Hack around Sniper + GCC 14 quirks."
+  cd019d95 build: build proton without SteamLinuxRuntime
+  aa078cc4 build: fix piper library install path
+  6a6f2520 proton: clean environment from Steam runtime (scout)
+  227349f4 proton: do not list this tool in Steam
+
+On dwproton-11.0-16, the result is the same tree as a merge of
+cachyos-11.0-20261015-native.
+
+diff --git a/Makefile.in b/Makefile.in
+index 86b4b68c..443add92 100644
+--- a/Makefile.in
++++ b/Makefile.in
+@@ -628,7 +628,7 @@ FFMPEG_CONFIGURE_ARGS += \
+ 	--enable-protocol=rtsp \
+ 
+ FFMPEG_i386-unix_CONFIGURE_ARGS := \
+-	--cross-prefix=i686-linux-gnu- \
++	--cross-prefix=i686-pc-linux-gnu- \
+ 	--arch=x86 \
+ 	--target-os=linux
+ 
+@@ -636,7 +636,7 @@ FFMPEG_i386-unix_CONFIGURE_ARGS += \
+ 	--optflags="$(CFLAGS) $(i386_CFLAGS)"
+ 
+ FFMPEG_x86_64-unix_CONFIGURE_ARGS := \
+-	--cross-prefix=x86_64-linux-gnu- \
++	--cross-prefix=x86_64-pc-linux-gnu- \
+ 	--arch=x86_64 \
+ 	--target-os=linux
+ 
+@@ -821,8 +821,8 @@ $(eval $(call rules-cmake,piper,x86_64,unix))
+ $(eval $(call rules-cmake,piper,aarch64,unix))
+ 
+ $(OBJ)/.piper-x86_64-post-build:
+-	mkdir -p $(PIPER_x86_64_DST)/lib/$(x86_64-unix_TARGET)
+-	mv $(PIPER_x86_64_DST)/*.so* $(PIPER_x86_64_DST)/lib/$(x86_64-unix_TARGET)
++	mkdir -p $(PIPER_x86_64_DST)/lib/$(x86_64-unix_LIBDIR)
++	mv $(PIPER_x86_64_DST)/*.so* $(PIPER_x86_64_DST)/lib/$(x86_64-unix_LIBDIR)
+ 	mkdir -p $(DST_DIR)/share
+ 	cp -a $(PIPER_x86_64_DST)/{espeak-ng-data,libtashkeel_model.ort} $(DST_DIR)/share/
+ 	touch $@
+@@ -940,9 +940,6 @@ endif # WITHOUT_TTS
+ ## wine
+ ##
+ 
+-# HACK: glib 2.0 in the runtime is old and causes a lot of errors with a newer GCC
+-WINE_CFLAGS += -Wno-discarded-qualifiers
+-
+ WINE_SOURCE_ARGS = \
+   --exclude configure \
+   --exclude autom4te.cache \
+@@ -1624,7 +1621,7 @@ $(FONTS_OBJ)/source-han/%.ttf: $$(%.ttf_CIDFONT) $$(%.ttf_FEATURES) $$(%.ttf_SEQ
+ 	mkdir -p $(FONTS_OBJ)/source-han
+ 	# Do not immediately create the target file, so that make is interrupted
+ 	# it will restart again
+-	afdko makeotfexe -f $($(notdir $@)_CIDFONT) -omitMacNames -ff $($(notdir $@)_FEATURES) \
++	afdko makeotf -f $($(notdir $@)_CIDFONT) -omitMacNames -ff $($(notdir $@)_FEATURES) \
+ 		-lic ADOBE -mf $($(notdir $@)_MENUNAMEDB) -r -nS -cs 25 -ch $($(notdir $@)_UNISOURCE) \
+ 		-ci $($(notdir $@)_SEQUENCES) -o $@.tmp
+ 	afdko tx -cff +S -no_futile $($(notdir $@)_CIDFONT) $@.cff
+@@ -2114,7 +2111,6 @@ ifeq ($(ENABLE_CCACHE),1)
+ 	export CCACHE_DIR := $(if $(CCACHE_DIR),$(CCACHE_DIR),$(HOME)/.ccache)
+ 	override DOCKER_OPTS := -v $(CCACHE_DIR):$(CCACHE_DIR)$(CONTAINER_MOUNT_OPTS) $(CCACHE_ENV) -e CCACHE_DIR=$(CCACHE_DIR) $(DOCKER_OPTS)
+ else
+-	export CCACHE_DISABLE := 1
+ 	override DOCKER_OPTS := $(CCACHE_ENV) -e CCACHE_DISABLE=1 $(DOCKER_OPTS)
+ endif
+ 
+@@ -2129,9 +2125,6 @@ ifeq ($(CONTAINER_ENGINE),)
+ 	CONTAINER_ENGINE := docker
+ endif
+ 
+-DOCKER_BASE = $(CONTAINER_ENGINE) run --rm -v $(SRC):$(SRC)$(CONTAINER_MOUNT_OPTS) -v $(OBJ):$(OBJ)$(CONTAINER_MOUNT_OPTS) \
+-                -w $(OBJ) -e MAKEFLAGS \
+-                $(DOCKER_OPTS) $(STEAMRT_IMAGE)
+ 
+ .PHONY: dist deploy redist symstore-tarball
+ .DEFAULT dist deploy redist symstore-tarball:
+diff --git a/configure.sh b/configure.sh
+index 0659b332..8549556a 100755
+--- a/configure.sh
++++ b/configure.sh
+@@ -143,6 +143,7 @@ function configure() {
+     CONTAINER_MOUNT_OPTS=:Z
+   fi
+ 
++  if [ "$arg_container_engine" != "none" ]; then
+   if [[ -n "$arg_container_engine" ]]; then
+     check_container_engine "$arg_container_engine" "$steamrt_image" || die "Specified container engine \"$arg_container_engine\" doesn't work"
+   else
+@@ -155,6 +156,7 @@ function configure() {
+         die "${arg_container_engine:-Container engine discovery} has failed. Please fix your setup."
+     fi
+   fi
++  fi
+ 
+   stat "Using $arg_container_engine."
+ 
+diff --git a/make/rules-autoconf.mk b/make/rules-autoconf.mk
+index 27cb2260..0478e940 100644
+--- a/make/rules-autoconf.mk
++++ b/make/rules-autoconf.mk
+@@ -31,9 +31,9 @@ $$(OBJ)/.$(1)-$(3)-configure: $$($(2)_SRC)/configure
+ $$(OBJ)/.$(1)-$(3)-build:
+ 	@echo ":: building $(1)-$(3)..." >&2
+ 	+cd "$$($(2)_$(3)_OBJ)" && env $$($(2)_$(3)_ENV) \
+-	$$(MAKE)
++	$$(MAKE) -j$$(SUBJOBS)
+ 	cd "$$($(2)_$(3)_OBJ)" && env $$($(2)_$(3)_ENV) \
+-	$$(MAKE) install
++	$$(MAKE) -j$$(SUBJOBS) install
+ 	touch $$@
+ 
+ endif
+diff --git a/make/rules-cargo.mk b/make/rules-cargo.mk
+index f1d1766b..ca7e2b9a 100644
+--- a/make/rules-cargo.mk
++++ b/make/rules-cargo.mk
+@@ -16,7 +16,7 @@ $$(OBJ)/.$(1)-$(3)-build:
+ 	@echo ":: building $(1)-$(3)..." >&2
+ 	cd $$($(2)_SRC) && env $$($(2)_$(3)_ENV) \
+ 	cargo build $(--quiet?) --release \
+-	      $$(filter -j%,$$(MAKEFLAGS)) \
++	      -j$$(SUBJOBS) --locked --offline --verbose \
+ 	      --target-dir $$($(2)_$(3)_OBJ) \
+ 	      $$($(3)-$(4)_CARGO_ARGS) \
+ 	      $$($(2)_CARGO_ARGS) \
+diff --git a/make/rules-cmake.mk b/make/rules-cmake.mk
+index 33a11fe4..85847b87 100644
+--- a/make/rules-cmake.mk
++++ b/make/rules-cmake.mk
+@@ -15,6 +15,7 @@ $$(OBJ)/.$(1)-$(3)-configure: $$($(2)_SRC)/CMakeLists.txt
+ 
+ 	cd "$$($(2)_$(3)_OBJ)" && env $$($(2)_$(3)_ENV) \
+ 	cmake "$$($(2)_SRC)" \
++	    -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+ 	    -DCMAKE_INSTALL_PREFIX="$$($(2)_$(3)_DST)" \
+ 	    -DCMAKE_INSTALL_LIBDIR="lib/$$($(3)-$(4)_LIBDIR)" \
+ 	    -DCMAKE_BUILD_TYPE=plain \
+@@ -27,9 +28,9 @@ $$(OBJ)/.$(1)-$(3)-configure: $$($(2)_SRC)/CMakeLists.txt
+ $$(OBJ)/.$(1)-$(3)-build:
+ 	@echo ":: building $(1)-$(3)..." >&2
+ 	cd "$$($(2)_$(3)_OBJ)" && env $$($(2)_$(3)_ENV) \
+-	$$(MAKE)
++	$$(MAKE) -j$$(SUBJOBS)
+ 	cd "$$($(2)_$(3)_OBJ)" && env $$($(2)_$(3)_ENV) \
+-	$$(MAKE) install
++	$$(MAKE) -j$$(SUBJOBS) install
+ 	touch $$@
+ endif
+ endef
+diff --git a/make/rules-common.mk b/make/rules-common.mk
+index 1d7210db..dd4d3914 100644
+--- a/make/rules-common.mk
++++ b/make/rules-common.mk
+@@ -107,15 +107,8 @@ $(2)_$(3)-unix_LIBFLAGS = $$(foreach d,$$($(2)_$(3)_DEPS),-Wl,-rpath-link=$$($$(
+ # RC and WIDL are intentionally always using windows target, as their
+ # unix version doesn't exist.
+ 
+-# HACK: forcing cargo to use gcc-10 as a linker because it's very unhappy about
+-# Sniper's gcc-14 and lack of libgcc_s. The only version we have guarantee for
+-# with SteamRT Sniper is the one from gcc 10.
+-#
+-# We also always need to specify the linker for the host architecture - a bunch
+-# of crates build host-native bits via build.rs.
+-
+ $(2)_$(3)_ENV = \
+-    $$(CARGO_LINKERS) \
++    CARGO_TARGET_$$(call toupper,$$($(3)-$(4)_CARGO_TARGET))_LINKER="$$($(3)-$(4)_TARGET)-gcc" \
+     CCACHE_BASEDIR="$$(CCACHE_BASEDIR)" \
+     STRIP="$$(STRIP)" \
+     AR="$$($(3)-$(4)_TARGET)-ar" \
+@@ -129,7 +122,7 @@ $(2)_$(3)_ENV = \
+     PATH="$$(call list-join,:,$$(foreach d,$$($(2)_$(3)_HOST_DEPS),$$($$(d)_$$(HOST_ARCH)_BINDIR)),,:):$$$$PATH" \
+     LD_LIBRARY_PATH="$$(call list-join,:,$$(foreach d,$$($(2)_$(3)_HOST_DEPS),$$($$(d)_$$(HOST_ARCH)_LIBDIR)/$$($$(HOST_ARCH)-unix_LIBDIR)),,:)$$$$LD_LIBRARY_PATH" \
+     PKG_CONFIG_PATH="$$(call list-join,:,$$(foreach d,$$($(2)_$(3)_DEPS),$$($$(d)_$(3)_LIBDIR)/$$($(3)-$(4)_LIBDIR)/pkgconfig)):$$(call list-join,:,$$(foreach d,$$($(2)_$(3)_DEPS),$$($$(d)_$(3)_DST)/share/pkgconfig))" \
+-    PKG_CONFIG_LIBDIR="/usr/lib/$$($(3)-$(4)_LIBDIR)/pkgconfig:/usr/share/pkgconfig" \
++    PKG_CONFIG_LIBDIR="/usr/$$($(3)-$(4)_LIBDIR_ARCH)/pkgconfig:/usr/share/pkgconfig" \
+     CMAKE_PREFIX_PATH="$$(call list-join,:,$$(foreach d,$$($(2)_$(3)_DEPS),$$($$(d)_$(3)_DST)))" \
+     CFLAGS="$$($(2)_$(3)_INCFLAGS) $$($(2)_CFLAGS) $$($(3)_CFLAGS) $$(CFLAGS) $$($(2)_$(3)_CFLAGS)" \
+     CPPFLAGS="$$($(2)_$(3)_INCFLAGS) $$($(2)_CFLAGS) $$($(3)_CFLAGS) $$(CFLAGS) $$($(2)_$(3)_CFLAGS)" \
+@@ -158,7 +151,7 @@ $(2)_$(3)_ENV += \
+     i386_CPPFLAGS="$$($(2)_i386_INCFLAGS) $$($(2)_CFLAGS) $$(i386_CFLAGS) $$(CFLAGS)" \
+     i386_CXXFLAGS="$$($(2)_i386_INCFLAGS) -std=c++17 $$($(2)_CFLAGS) $$(i386_CFLAGS) $$(CFLAGS)" \
+     i386_LDFLAGS="$$($(2)_i386-windows_LIBFLAGS) $$($(2)_i386_LIBFLAGS) $$($(2)_LDFLAGS) $$(i386_LDFLAGS) $$(LDFLAGS)" \
+-    i386_PKG_CONFIG_LIBDIR="/usr/lib/$$(i386-windows_LIBDIR)/pkgconfig:/usr/share/pkgconfig" \
++    i386_PKG_CONFIG_LIBDIR="/usr/lib32/pkgconfig:/usr/share/pkgconfig" \
+     x86_64_AR="$$(x86_64-windows_TARGET)-ar" \
+     x86_64_RANLIB="$$(x86_64-windows_TARGET)-ranlib" \
+     x86_64_CC="$$(x86_64-windows_TARGET)-gcc" \
+@@ -168,7 +161,7 @@ $(2)_$(3)_ENV += \
+     x86_64_CPPFLAGS="$$($(2)_x86_64_INCFLAGS) $$($(2)_CFLAGS) $$(x86_64_CFLAGS) $$(CFLAGS)" \
+     x86_64_CXXFLAGS="$$($(2)_x86_64_INCFLAGS) -std=c++17 $$($(2)_CFLAGS) $$(x86_64_CFLAGS) $$(CFLAGS)" \
+     x86_64_LDFLAGS="$$($(2)_x86_64-windows_LIBFLAGS) $$($(2)_x86_64_LIBFLAGS) $$($(2)_LDFLAGS) $$(x86_64_LDFLAGS) $$(LDFLAGS)" \
+-    x86_64_PKG_CONFIG_LIBDIR="/usr/lib/$$(x86_64-windows_LIBDIR)/pkgconfig:/usr/share/pkgconfig" \
++    x86_64_PKG_CONFIG_LIBDIR="/usr/lib64/pkgconfig:/usr/share/pkgconfig" \
+     aarch64_CFLAGS="$$($(2)_aarch64_INCFLAGS) $$($(2)_CFLAGS) $$(aarch64_CFLAGS) $$(CFLAGS)" \
+     aarch64_CPPFLAGS="$$($(2)_aarch64_INCFLAGS) $$($(2)_CFLAGS) $$(aarch64_CFLAGS) $$(CFLAGS)" \
+     aarch64_CXXFLAGS="$$($(2)_aarch64_INCFLAGS) -std=c++17 $$($(2)_CFLAGS) $$(aarch64_CFLAGS) $$(CFLAGS)" \
+@@ -194,8 +187,8 @@ else
+ install-strip = $(OBJCOPY) $(OBJCOPY_FLAGS) --strip-debug $(1) $(2)/$(notdir $(1)) && rm -f $(2)/$(notdir $(1)).debug
+ endif
+ 
+-i386-unix_TARGET := i686-linux-gnu
+-x86_64-unix_TARGET := x86_64-linux-gnu
++i386-unix_TARGET := i686-pc-linux-gnu
++x86_64-unix_TARGET := x86_64-pc-linux-gnu
+ aarch64-unix_TARGET := aarch64-linux-gnu
+ i386-windows_TARGET := i686-w64-mingw32
+ x86_64-windows_TARGET := x86_64-w64-mingw32
+@@ -203,7 +196,9 @@ aarch64-windows_TARGET := aarch64-w64-mingw32
+ arm64ec-windows_TARGET := arm64ec-w64-mingw32
+ 
+ i386-unix_LIBDIR := i386-linux-gnu
++i386-unix_LIBDIR_ARCH := lib32
+ x86_64-unix_LIBDIR := x86_64-linux-gnu
++x86_64-unix_LIBDIR_ARCH := lib64
+ aarch64-unix_LIBDIR := aarch64-linux-gnu
+ i386-windows_LIBDIR := i386-w64-mingw32
+ x86_64-windows_LIBDIR := x86_64-w64-mingw32
+diff --git a/make/rules-configure.mk b/make/rules-configure.mk
+index f9eb1efd..911532ba 100644
+--- a/make/rules-configure.mk
++++ b/make/rules-configure.mk
+@@ -32,9 +32,9 @@ $$(OBJ)/.$(1)-$(3)-configure: $$($(2)_CONFIGURE_DEPS)
+ $$(OBJ)/.$(1)-$(3)-build:
+ 	@echo ":: building $(1)-$(3)..." >&2
+ 	+cd "$$($(2)_$(3)_OBJ)" && env $$($(2)_$(3)_ENV) \
+-	$$(MAKE)
++	$$(MAKE) -j$$(SUBJOBS)
+ 	cd "$$($(2)_$(3)_OBJ)" && env $$($(2)_$(3)_ENV) \
+-	$$(MAKE) install
++	$$(MAKE) -j$$(SUBJOBS) install
+ 	touch $$@
+ endif
+ endef
+diff --git a/make/rules-makedep.mk b/make/rules-makedep.mk
+index 48254085..cde25eef 100644
+--- a/make/rules-makedep.mk
++++ b/make/rules-makedep.mk
+@@ -78,9 +78,9 @@ $$(OBJ)/.$(1)-$(3)-configure: $$(OBJ)/.wine-$$(HOST_ARCH)-tools
+ $$(OBJ)/.$(1)-$(3)-build:
+ 	@echo ":: building $(1)-$(3)..." >&2
+ 	+cd "$$($(2)_$(3)_OBJ)" && env $$($(2)_$(3)_ENV) \
+-	$$(MAKE)
++	$$(MAKE) -j$$(SUBJOBS)
+ 	cd "$$($(2)_$(3)_OBJ)" && env $$($(2)_$(3)_ENV) \
+-	$$(MAKE) install
++	$$(MAKE) -j$$(SUBJOBS) install
+ 	if [ "$(3)" == "aarch64" ]; then \
+ 		mkdir -p $$($(2)_$(3)_DST)/lib/wine/aarch64-windows/ && \
+ 		mv $$($(2)_$(3)_DST)/lib/wine/arm64ec-windows/* $$($(2)_$(3)_DST)/lib/wine/aarch64-windows/; \
+diff --git a/make/rules-meson.mk b/make/rules-meson.mk
+index c204ef32..060c9273 100644
+--- a/make/rules-meson.mk
++++ b/make/rules-meson.mk
+@@ -52,6 +52,7 @@ $$(OBJ)/.$(1)-$(3)-configure: $$($(2)_SRC)/meson.build meson-source
+ 	      --libdir="lib/$$($(3)-$(4)_LIBDIR)" \
+ 	      --buildtype=plain \
+ 	      --cross-file=$$($(2)_$(3)_OBJ)/cross.txt \
++	      --wrap-mode=nodownload \
+ 	      $$($(3)-$(4)_MESON_ARGS) \
+ 	      $$($(2)_MESON_ARGS) \
+ 	      $$($(2)_$(3)_MESON_ARGS) \
+@@ -62,7 +63,7 @@ $$(OBJ)/.$(1)-$(3)-configure: $$($(2)_SRC)/meson.build meson-source
+ $$(OBJ)/.$(1)-$(3)-build:
+ 	@echo ":: building $(1)-$(3)..." >&2
+ 	+env $$($(2)_$(3)_ENV) \
+-	ninja -C "$$($(2)_$(3)_OBJ)" install
++	ninja -j$$(SUBJOBS) -C "$$($(2)_$(3)_OBJ)" install
+ 	touch $$@
+ endif
+ endef
+diff --git a/make/rules-winemaker.mk b/make/rules-winemaker.mk
+index ba1b76b4..c9c90b2d 100644
+--- a/make/rules-winemaker.mk
++++ b/make/rules-winemaker.mk
+@@ -34,7 +34,7 @@ $$(OBJ)/.$(1)-$(3)-build:
+ 	@echo ":: building $(1)-$(3)..." >&2
+ 	rsync -arx "$$($(2)_SRC)/" "$$($(2)_$(3)_OBJ)/"
+ 	env $$($(2)_$(3)_ENV) \
+-	$$(MAKE) -C "$$($(2)_$(3)_OBJ)" LIBRARIES="$$($(2)_LDFLAGS)"
++	$$(MAKE) -j$$(SUBJOBS) -C "$$($(2)_$(3)_OBJ)" LIBRARIES="$$($(2)_LDFLAGS)"
+ 	cd "$$($(2)_$(3)_OBJ)" && touch "$(basename $(4)).spec" && env $$($(2)_$(3)_ENV) \
+ 	$$(WINE_$$(HOST_ARCH)_OBJ)/tools/winebuild/winebuild --$(lastword $(subst ., ,$(4))) \
+ 	    --fake-module -E "$(basename $(4)).spec" -o "$(4).fake"
+diff --git a/proton b/proton
+index 67df27c7..2666a9d7 100755
+--- a/proton
++++ b/proton
+@@ -2563,6 +2563,16 @@ if __name__ == "__main__":
+         log("No compat data path?")
+         sys.exit(1)
+ 
++    # unset steam runtime (scout) stuff for native version
++    if "STEAM_RUNTIME" in os.environ:
++        del os.environ["STEAM_RUNTIME"]
++        if "SYSTEM_LD_LIBRARY_PATH" in os.environ:
++            os.environ["LD_LIBRARY_PATH"] = os.environ["SYSTEM_LD_LIBRARY_PATH"]
++            log("Restoring LD_LIBRARY_PATH to: " + str(os.environ["LD_LIBRARY_PATH"]))
++        if "SYSTEM_PATH" in os.environ:
++            os.environ["PATH"] = os.environ["SYSTEM_PATH"]
++            log("Restoring PATH to: " + str(os.environ["PATH"]))
++
+     g_proton = Proton(os.path.dirname(sys.argv[0]))
+ 
+ 
+diff --git a/toolmanifest_x86_64.vdf b/toolmanifest_x86_64.vdf
+index cb52d527..13f6aa30 100644
+--- a/toolmanifest_x86_64.vdf
++++ b/toolmanifest_x86_64.vdf
+@@ -2,7 +2,7 @@
+ {
+   "version" "2"
+   "commandline" "/proton %verb%"
+-  "require_tool_appid" "4183110"
++  "unlisted" "1"
+   "use_sessions" "1"
+   "compatmanager_layer_name" "proton"
+ }

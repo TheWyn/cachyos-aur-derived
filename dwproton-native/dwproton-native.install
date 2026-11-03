@@ -1,0 +1,32 @@
+#!/bin/sh
+
+post_install() {
+  echo ":: dwproton-native is an unofficial native build of dwproton: it runs on"
+  echo "   the host system, not inside the Steam Linux Runtime. Valve, Dawn Winery"
+  echo "   and CachyOS do not support it."
+  echo ""
+  echo "   If a game (especially one with anti-cheat) fails with this build, try the"
+  echo "   official dwproton release (dwproton-bin) before you report it upstream:"
+  echo "   https://dawn.wine/dawn-winery/dwproton"
+  echo ""
+  echo "   Steam does not show this tool, because Steam's SteamRT3 client cannot"
+  echo "   start native tools from /usr (steam-for-linux issue 13520). Lutris finds"
+  echo "   it, and for umu-launcher use"
+  echo "   PROTONPATH=/usr/share/steam/compatibilitytools.d/dwproton-native"
+  echo ""
+  echo "   To use it in Steam, you can make a wrapper tool outside /usr. Go to a"
+  echo "   compatibilitytools.d folder that Steam reads (for example the one in"
+  echo "   your Steam folder) and run these commands there as your user, not root."
+  echo "   Then restart Steam and pick \"dwproton-<version> (native, home)\". Run"
+  echo "   them again in the same folder after an upgrade to update that name."
+  echo ""
+  cat <<'EOF'
+mkdir -p dwproton-native-home &&
+cd dwproton-native-home &&
+ln -sfn /usr/share/steam/compatibilitytools.d/dwproton-native tool &&
+sed -e '/"unlisted"/d' -e 's|"/proton %verb%"|"/tool/proton %verb%"|' tool/toolmanifest.vdf > toolmanifest.vdf &&
+sed -e 's/"dwproton-native"/"dwproton-native-home"/' -e 's/(native)/(native, home)/' tool/compatibilitytool.vdf > compatibilitytool.vdf
+EOF
+  echo ""
+  echo "   If GI/ZZZ do not launch outside of Steam, dwproton suggests UMU_USE_STEAM=1."
+}
